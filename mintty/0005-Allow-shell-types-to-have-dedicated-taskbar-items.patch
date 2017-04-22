@@ -1,0 +1,620 @@
+From a11f568b748b6d116b9c790e030b109af04df62b Mon Sep 17 00:00:00 2001
+From: Mihail Konev <k.mvc@ya.ru>
+Date: Fri, 21 Apr 2017 09:16:50 +0500
+Subject: [PATCH 5/6] Allow shell types to have dedicated taskbar items
+
+To preserve pinnability, make an executable for each shell type.
+For it, put the src/ into a dll, and link the executables to it.
+Name the library "msys-mintty-${MAINLIB_VER:-0}.dll"
+
+Dedicated executables run the ~/.config/mintty/preferred_shell without
+popping the launcher up, and default to /usr/bin/sh.
+
+Place the dedicated-window checkbox above the buttons.
+This way, buttons are at one side (bottom), and text/options on another.
+
+For mingw dedicated executables, this needs icons from the msys2-launcher:
+https://github.com/elieux/msys2-launcher.git
+---
+ HACKING                |   2 +
+ main.c                 |  17 +++++
+ src/res.mft => res.mft |   0
+ src/res.rc => res.rc   |  16 ++---
+ src/Makefile           |  73 ++++++++++++++-----
+ src/appinfo.h          |   8 +++
+ src/launcher.c         | 189 ++++++++++++++++++++++++++++++++++++++++---------
+ src/launcher.h         |   5 ++
+ src/res.h              |   9 +++
+ src/winmain.c          |  26 ++++++-
+ 10 files changed, 283 insertions(+), 62 deletions(-)
+ create mode 100644 HACKING
+ create mode 100644 main.c
+ rename src/res.mft => res.mft (100%)
+ rename src/res.rc => res.rc (74%)
+
+diff --git a/HACKING b/HACKING
+new file mode 100644
+index 0000000..dbc5240
+--- /dev/null
++++ b/HACKING
+@@ -0,0 +1,2 @@
++If you want to test MSYS2 mintty "in-place", inside the /usr/bin, then also
++copy the msys-mintty-0.dll alongside the executable(s).
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..3fe57a2
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,17 @@
++extern char* preset_msystem_to_set;
++extern int mintty_main(int, char**);
++
++int main(int argc, char **argv) {
++  int ret;
++
++#ifdef MINTTY_AS_MSYS2
++  preset_msystem_to_set = "MSYS";
++#elif defined(MINTTY_AS_MINGW32)
++  preset_msystem_to_set = "MINGW32";
++#elif defined(MINTTY_AS_MINGW64)
++  preset_msystem_to_set = "MINGW64";
++#endif
++
++  ret = mintty_main(argc, argv);
++  return ret;
++}
+diff --git a/src/res.mft b/res.mft
+similarity index 100%
+rename from src/res.mft
+rename to res.mft
+diff --git a/src/res.rc b/res.rc
+similarity index 74%
+rename from src/res.rc
+rename to res.rc
+index 7347d75..d5904af 100644
+--- a/src/res.rc
++++ b/res.rc
+@@ -1,10 +1,9 @@
+ #include "appinfo.h"
+ #include "winids.h"
+ #include "res.h"
+-
+ #include <winresrc.h>
+ 
+-IDI_MAINICON ICON "/msys2.ico"
++IDI_MAINICON ICON MAIN_ICO
+ 
+ IDD_MAINBOX DIALOGEX DISCARDABLE 32, 8, DIALOG_WIDTH, DIALOG_HEIGHT
+ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+@@ -14,7 +13,7 @@ CLASS DIALOG_CLASS
+ BEGIN
+ END
+ 
+-IDD_LAUNCHER DIALOGEX 0, 0, 95, 130
++IDD_LAUNCHER DIALOGEX 0, 0, 95, 144
+ STYLE DS_3DLOOK | DS_CENTER | DS_SYSMODAL | DS_SHELLFONT | WS_CAPTION | WS_VISIBLE | WS_POPUP | WS_SYSMENU
+ EXSTYLE WS_EX_TOPMOST | WS_EX_APPWINDOW
+ CAPTION "Mintty"
+@@ -23,12 +22,13 @@ FONT 8, "Ms Shell Dlg", 0, 0, 1
+     GROUPBOX        "Command interpreter", IDD_COMM_INTERP, 3, 5, 87, 30, 0, WS_EX_LEFT
+     COMBOBOX        IDD_ETC_SHELLS, 9, 16, 76, 14, CBS_DROPDOWNLIST | CBS_HASSTRINGS, WS_EX_LEFT
+ 
+-    GROUPBOX        "Shell type", 0, 3, 37, 87, 69, 0, WS_EX_LEFT
+-    PUSHBUTTON      "MSYS2", IDD_MSYS2_BTN, 9, 49, 44, 14, 0, WS_EX_LEFT
+-    PUSHBUTTON      "Mingw-w64 32 bit", IDD_MINGW32_BTN, 9, 68, 76, 14, 0, WS_EX_LEFT
+-    PUSHBUTTON      "Mingw-w64 64 bit", IDD_MINGW64_BTN, 9, 87, 76, 14, 0, WS_EX_LEFT
++    GROUPBOX        "Shell type", 0, 3, 37, 87, 83, 0, WS_EX_LEFT
++    AUTOCHECKBOX    "Dedicated window", IDD_DEDICATED, 10, 49, 75, 8, BS_CENTER, WS_EX_LEFT
++    PUSHBUTTON      "MSYS2", IDD_MSYS2_BTN, 9, 63, 44, 14, 0, WS_EX_LEFT
++    PUSHBUTTON      "Mingw-w64 32 bit", IDD_MINGW32_BTN, 9, 82, 76, 14, 0, WS_EX_LEFT
++    PUSHBUTTON      "Mingw-w64 64 bit", IDD_MINGW64_BTN, 9, 101, 76, 14, 0, WS_EX_LEFT
+ 
+-    PUSHBUTTON      "Cancel", IDCANCEL, 26, 111, 44, 14, NOT WS_TABSTOP, WS_EX_LEFT
++    PUSHBUTTON      "Cancel", IDCANCEL, 26, 125, 44, 14, NOT WS_TABSTOP, WS_EX_LEFT
+ }
+ 
+ /*
+diff --git a/src/Makefile b/src/Makefile
+index 3994c10..ed090c0 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -72,6 +72,8 @@ version := \
+   $(shell echo $(shell echo VERSION | cpp -P $(CPPFLAGS) --include appinfo.h))
+ name_ver := $(NAME)-$(version)
+ 
++QUIET_OK = 2>/dev/null || true
++
+ #############################################################################
+ # compilation parameters
+ 
+@@ -126,27 +128,61 @@ $(BINDIR)/term%.o: term%.c
+ $(BINDIR)/%.o: %.c
+ 	$(CC) -c $(DEPOPT) $(CPPFLAGS) $(CCFLAGS) -fstack-check $< -o $(BINDIR)/$*.o
+ 
+-$(BINDIR)/%.o: %.rc %.h %.mft
+-	$(RC) -c 65001 --preprocessor '$(CC) -E -xc -DRC_INVOKED $(DEPOPT) $(CPPFLAGS)' $< $(BINDIR)/$*.o
+-	-mv $*.d $(BINDIR)/
++ifeq ($(MAINLIB_VER),)
++  MAINLIB_VER := 0
++endif
++
++MAINLIB = msys-mintty-$(MAINLIB_VER).dll
+ 
+-exe := $(NAME).exe
++exe := $(MAINLIB) $(NAME).exe $(NAME)-as-msys2.exe \
++  $(NAME)-as-mingw32.exe $(NAME)-as-mingw64.exe
+ exe: $(exe)
+-$(exe): $(objs)
+-	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
+-	#-du -b $@
+ 
+-bin := $(BINDIR)/$(NAME).exe
+-bin: $(BINDIR) $(bin)
++$(MAINLIB): $(objs)
++	$(CC) -shared $(LDFLAGS) $^ $(LDLIBS) -o $@
++
++link_exe = $(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
++compile_c = $(CC) -c $(CPPFLAGS) $(CCFLAGS) $< -o $@
++compile_res_rc1 = cd $(@D) && $(RC) -c 65001 --preprocessor '$(CC) -E -xc
++compile_res_rc2 = -DRC_INVOKED -I./src $(CPPFLAGS)' res.rc $(@F)
++
++$(NAME).exe: ../main.o ../res.o $(MAINLIB)
++	$(link_exe)
++$(NAME)-as-msys2.exe: ../main-msys2.o ../res-msys2.o $(MAINLIB)
++	$(link_exe)
++$(NAME)-as-mingw32.exe: ../main-mingw32.o ../res-mingw32.o $(MAINLIB)
++	$(link_exe)
++$(NAME)-as-mingw64.exe: ../main-mingw64.o ../res-mingw64.o $(MAINLIB)
++	$(link_exe)
++
++../main.o: ../main.c
++	$(compile_c)
++../main-msys2.o: ../main.c
++	$(compile_c) -DMINTTY_AS_MSYS2
++../main-mingw32.o: ../main.c
++	$(compile_c) -DMINTTY_AS_MINGW32
++../main-mingw64.o: ../main.c
++	$(compile_c) -DMINTTY_AS_MINGW64
++
++../res.o: ../res.rc res.h ../res.mft
++	$(compile_res_rc1) $(compile_res_rc2)
++../res-msys2.o: ../res.rc res.h ../res.mft
++	$(compile_res_rc1) -DMINTTY_AS_MSYS2 $(compile_res_rc2)
++../res-mingw32.o: ../res.rc res.h ../res.mft
++	$(compile_res_rc1) -DMINTTY_AS_MINGW32 $(compile_res_rc2)
++../res-mingw64.o: ../res.rc res.h ../res.mft
++	$(compile_res_rc1) -DMINTTY_AS_MINGW64 $(compile_res_rc2)
++
++bin := $(addprefix $(BINDIR)/, $(exe))
++bin: $(BINDIR) $(BINDIR)/$(NAME).exe
++
+ $(BINDIR):
+ 	mkdir -p $(BINDIR)
+-$(bin): $(bins)
+-	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
+-	cp -f $@ $(BINFOLDER)/		# for 'dobin' install in .cygport
+-	# support simpler debugging:
+-	-test -f `basename $@` && cp -fp $@ ./ || true
+-	# report size of exe:
+-	#-type du && du -b $@ || true
++
++$(BINDIR)/$(NAME).exe: $(exe) $(BINDIR)
++	cp -f $(exe) $(BINDIR)/
++	cp -f $(bin) $(BINFOLDER)/		# for 'dobin' install in .cygport
++	-test -f `basename $@` && cp -fp $(bin) ./ || true
+ 
+ #-include $(wildcard *.d)
+ -include $(wildcard $(BINDIR)/*.d)
+@@ -244,8 +280,9 @@ $(html): ../docs/$(NAME).1
+ 	groff -t -man -Thtml $< > $@
+ 
+ clean:
+-	#rm -rf *.d *.o $(NAME)*
+-	rm -rf $(BINDIR)/*.d $(BINDIR)/*.o $(BINDIR)/$(NAME)*
++	rm -rf *.d *.o $(NAME)* $(QUIET_OK)
++	rm -rf ../*.d ../*.o ../$(NAME)* $(QUIET_OK)
++	rm -rf $(BINDIR)/*.d $(BINDIR)/*.o $(BINDIR)/$(NAME)* $(QUIET_OK)
+ 
+ check:	checksrc checkresource checkloc
+ 
+diff --git a/src/appinfo.h b/src/appinfo.h
+index 2877d69..5b23ccd 100644
+--- a/src/appinfo.h
++++ b/src/appinfo.h
+@@ -10,7 +10,15 @@
+ #define BUILD_NUMBER   0
+ 
+ // needed for res.rc
++#if defined(MINTTY_AS_MINGW32)
++#define APPDESC "32-bit native MSYS2"
++#elif defined(MINTTY_AS_MINGW64)
++#define APPDESC "64-bit native MSYS2"
++#elif defined(MINTTY_AS_MSYS2)
++#define APPDESC "Emulated MSYS2"
++#else
+ #define APPDESC "MSYS2 terminal"
++#endif
+ #define AUTHOR  "Andy Koppe / Thomas Wolff"
+ #define YEAR    "2013/2016"
+ 
+diff --git a/src/launcher.c b/src/launcher.c
+index 4730570..1cce9a6 100644
+--- a/src/launcher.c
++++ b/src/launcher.c
+@@ -12,9 +12,17 @@
+ #define INSIDE_LAUNCHER
+ #include "launcher.h"
+ 
++#define DEFAULT_SHELL "/usr/bin/sh"
++#define LINELEN 1024
++
+ static char ***ret_argv_addr;
+ 
+ int launcher_cancelled = 0;
++int launcher_do_dedicated_window = 0;
++
++const char* default_preferred_shells[] = {
++  "bin/bash", "bash", "bin/sh", "sh", NULL
++};
+ 
+ static char* get_preferred_shell_config_path(void) {
+   char *xdg, *ret;
+@@ -25,6 +33,58 @@ static char* get_preferred_shell_config_path(void) {
+   return ret;
+ }
+ 
++static char* fgets_nonempty_noncomment_line(char *buf, size_t bufsiz, FILE *stream);
++
++static char* get_preferred_shell(void) {
++  char *s, *xdg_shell;
++  char *ret = NULL;
++  char line[LINELEN];
++  FILE *f;
++  xdg_shell = get_preferred_shell_config_path();
++  f = fopen(xdg_shell, "r");
++  if (f != NULL) {
++    for (;;) {
++      s = fgets_nonempty_noncomment_line(line, sizeof line, f);
++      if (s == NULL) { break; }
++      ret = strdup(s);
++      break;
++    }
++    fclose(f);
++  }
++  free(xdg_shell);
++  return ret;
++}
++
++static wchar_t *get_program_directory(void) {
++  wchar_t *d = NULL;
++  size_t d_n_inuse = 0;
++  size_t d_n_alloc = 512;
++  size_t i;
++
++  d = malloc(d_n_alloc * sizeof(wchar_t));
++  for (;;) {
++    GetModuleFileNameW(NULL, d, d_n_alloc);
++    for (i = 0; i < d_n_alloc; i++) {
++      if (d[i] == 0) {
++        break;
++      }
++    }
++    d_n_inuse = i;
++    if (d_n_inuse < d_n_alloc-1) {
++      break;
++    }
++    d_n_alloc *= 1.5;
++    d = realloc(d, d_n_alloc * sizeof(wchar_t));
++  }
++
++  wchar_t *d1 = wcsrchr(d, '\\');
++  if (d1 != NULL) {
++    *d1 = 0;
++  }
++
++  return d;
++}
++
+ static char **shells;
+ size_t shells_sz = 4;
+ size_t shells_n = 0;
+@@ -67,26 +127,98 @@ void launcher_setup_env(void) {
+   return;
+ }
+ 
+-void launcher_setup_argv(void) {
+-  const char *cmdname;
++static char* get_mbs_from_wcs(wchar_t *wc) {
++  char *s;
++  size_t l;
++
++  l = wcstombs(NULL, wc, 0);
++  s = malloc(l + 1);
++  l = wcstombs(s, wc, l);
++
++  if (l == (size_t)-1) {
++    perror(__func__);
++    exit(1);
++  }
+ 
++  return s;
++}
++
++void launcher_exec_dedicated(void) {
++  wchar_t *progdir_wc;
++  char *progdir_mb;
++  char *progdedicated_name;
++  size_t progdedicated_sz;
++  char *progdedicated;
++
++  progdir_wc = get_program_directory();
++  progdir_mb = get_mbs_from_wcs(progdir_wc);
++  if (!progdir_mb) {
++    exit(1);
++  }
++
++  progdedicated_name = NULL;
++  if (selected_btn == IDD_MSYS2_BTN) {
++    progdedicated_name = "mintty-as-msys2";
++  } else if (selected_btn == IDD_MINGW32_BTN) {
++    progdedicated_name = "mintty-as-mingw32";
++  } else if (selected_btn == IDD_MINGW64_BTN) {
++    progdedicated_name = "mintty-as-mingw64";
++  }
++
++  progdedicated_sz = (wcslen(progdir_wc)*4 + 1 + strlen(progdedicated_name) + 1);
++  progdedicated = malloc(progdedicated_sz);
++  sprintf(progdedicated, "%ls/%s", progdir_wc, progdedicated_name);
++
++  execl(progdedicated, progdedicated_name, cmd, NULL);
++
++  free(progdedicated);
++  free(progdir_mb);
++  free(progdir_wc);
++  exit(1);
++}
++
++char *prepend_dash_to_progname(const char *prog) {
++  char *ret;
++  const char *progname;
++
++  progname = strrchr(prog, '/');
++  if (progname == NULL) {
++    progname = prog;
++  } else {
++    progname += 1;
++  }
++  ret = asform("-%s", progname);
++  return ret;
++}
++
++static void setup_login_shell_argv(char *prog, char **argv) {
++  char *dash_progname;
++
++  /* Prepending "-" to shell's argv[0] should make it behave as a login one. */
++  dash_progname = prepend_dash_to_progname(prog);
++
++  argv[0] = dash_progname;
++  argv[1] = NULL;
++}
++
++void launcher_setup_argv(void) {
+   /* Global variable from winmain.c, used to pass the filepath to execute to
+    * child_create() from main() ("Work out what to execute."). */
+   cmd = shells[selected_exe];
+ 
+-  /* Prepending "-" to shell's argv[0] should make it behave as a login one. */
+-  cmdname = strrchr(cmd, '/');
+-  if (cmdname == NULL) {
+-    cmdname = cmd;
+-  } else {
+-    cmdname += 1;
+-  }
+-  if (launcher_argv[0]) {
+-    free(launcher_argv[0]);
+-  }
+-  launcher_argv[0] = asform("-%s", cmdname);
+-  launcher_argv[1] = NULL;
++  setup_login_shell_argv(cmd, launcher_argv);
++  *ret_argv_addr = launcher_argv;
++}
++
++void launcher_setup_argv_from_prefs(void) {
++  char *preferred_shell;
+ 
++  preferred_shell = get_preferred_shell();
++  if (preferred_shell == NULL) {
++    preferred_shell = strdup(DEFAULT_SHELL);
++  }
++  cmd = preferred_shell; /* See launcher_setup_argv */
++  setup_login_shell_argv(cmd, launcher_argv);
+   *ret_argv_addr = launcher_argv;
+ }
+ 
+@@ -166,6 +298,8 @@ static void launcher_add_tooltips(HWND hwnd) {
+       "32-bit shell, for running and building native apps.");
+   launcher_add_tooltip_to_window_by_id(hwnd, IDD_MINGW64_BTN,
+       "64-bit shell, for running and building native apps.");
++  launcher_add_tooltip_to_window_by_id(hwnd, IDD_DEDICATED,
++      "Use a separate Taskbar item, and do not pop up this dialog in new windows.");
+ }
+ 
+ static void add_line_to_combo_box(HWND hwnd, const char *text) {
+@@ -218,13 +352,13 @@ static void launcher_add_shells(HWND dialog) {
+   size_t i;
+   ssize_t j;
+   FILE *f;
+-  char line[1024];
+-  char *s, *xdg_shell;
++  char line[LINELEN];
++  char *s;
+   char *preferred_shell = NULL;
+ 
+   f = fopen("/etc/shells", "r");
+   if (!f) {
+-    shells[0] = strdup("/usr/bin/sh");
++    shells[0] = strdup(DEFAULT_SHELL);
+     shells_n = 1;
+   } else {
+     for (;;) {
+@@ -245,20 +379,9 @@ static void launcher_add_shells(HWND dialog) {
+     add_line_to_combo_box(etc_shells, shells[i]);
+   }
+ 
+-  xdg_shell = get_preferred_shell_config_path();
+-  f = fopen(xdg_shell, "r");
+-  if (f != NULL) {
+-    for (;;) {
+-      s = fgets_nonempty_noncomment_line(line, sizeof line, f);
+-      if (s == NULL) { break; }
+-      preferred_shell = strdup(s);
+-      break;
+-    }
+-    fclose(f);
+-  }
+-  free(xdg_shell);
+-
+   j = -1;
++
++  preferred_shell = get_preferred_shell();
+   if (preferred_shell) {
+     j = find_shell_match(preferred_shell);
+     if (j < 0) {
+@@ -272,11 +395,8 @@ static void launcher_add_shells(HWND dialog) {
+     free(preferred_shell);
+   }
+ 
+-  const char* default_shells[] = {
+-    "bin/bash", "bash", "bin/sh", "sh", NULL
+-  };
+   const char **dflt_sh;
+-  for (dflt_sh = default_shells; (j < 0) && (*dflt_sh != NULL); dflt_sh++) {
++  for (dflt_sh = default_preferred_shells; (j < 0) && (*dflt_sh != NULL); dflt_sh++) {
+     j = find_shell_match(*dflt_sh);
+   }
+ 
+@@ -303,6 +423,7 @@ INT_PTR CALLBACK launcher_dlgproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
+     case IDD_MINGW32_BTN:
+     case IDD_MINGW64_BTN:
+       selected_exe = SendMessage(etc_shells, CB_GETCURSEL, 0, 0);
++      launcher_do_dedicated_window = IsDlgButtonChecked(hwnd, IDD_DEDICATED);
+       DestroyWindow(hwnd);
+       selected_btn = LOWORD(wParam);
+       return TRUE;
+diff --git a/src/launcher.h b/src/launcher.h
+index 954caa3..dde93b9 100644
+--- a/src/launcher.h
++++ b/src/launcher.h
+@@ -1,13 +1,18 @@
+ #ifndef INSIDE_LAUNCHER
+ extern int launcher_cancelled;
++extern int launcher_do_dedicated_window;
+ extern HICON launcher_icon;
+ #endif
+ 
++char *prepend_dash_to_progname(const char *prog);
++
+ void launcher_init(char ***argv_addr);
+ void launcher_free(void);
+ 
+ void launcher_setup_env(void);
+ void launcher_setup_argv(void);
+ void launcher_save_prefs(void);
++void launcher_exec_dedicated(void);
++void launcher_setup_argv_from_prefs(void);
+ 
+ INT_PTR CALLBACK launcher_dlgproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+diff --git a/src/res.h b/src/res.h
+index ef1ed39..2da89ef 100644
+--- a/src/res.h
++++ b/src/res.h
+@@ -16,6 +16,14 @@
+ #define DIALOG_TITLE "Options"
+ #define DIALOG_CLASS "ConfigBox"
+ 
++#if defined(MINTTY_AS_MINGW32)
++#define MAIN_ICO "mingw32.ico"
++#elif defined(MINTTY_AS_MINGW64)
++#define MAIN_ICO "mingw64.ico"
++#else
++#define MAIN_ICO "/msys2.ico"
++#endif
++
+ #define DIALOG_FONT "MS Shell Dlg"
+ //#define DIALOG_FONT "Tahoma"
+ 
+@@ -29,3 +37,4 @@
+ #define IDD_MINGW64_BTN      0x103
+ #define IDD_COMM_INTERP      0x104
+ #define IDD_ETC_SHELLS       0x105
++#define IDD_DEDICATED        0x106
+diff --git a/src/winmain.c b/src/winmain.c
+index ddcecaf..ac25b79 100644
+--- a/src/winmain.c
++++ b/src/winmain.c
+@@ -41,6 +41,8 @@ char * home;
+ char * cmd;
+ bool icon_is_from_shortcut = false;
+ 
++char *preset_msystem_to_set = NULL;
++
+ HINSTANCE inst;
+ HWND wnd;
+ HIMC imc;
+@@ -2197,7 +2199,7 @@ static int getenvi(const char *varname) {
+ }
+ 
+ int
+-main(int argc, char *argv[])
++mintty_main(int argc, char *argv[])
+ {
+   bool do_launcher = false;
+ 
+@@ -2795,8 +2797,25 @@ main(int argc, char *argv[])
+ 
+   {
+     char **argv1 = argv;
++    bool free_the_launcher = false;
++
++    if (preset_msystem_to_set != NULL) {
++      setenv("MSYSTEM", preset_msystem_to_set, true);
++      if (do_launcher) {
++        do_launcher = false;
++        free_the_launcher = true;
++        launcher_init(&argv1);
++        launcher_setup_argv_from_prefs();
++      } else {
++        /* Prepending "-" to shell's argv[0] should make it behave as a login one. */
++        char *dash_cmdname = prepend_dash_to_progname(cmd);
++        //free(argv1[0]); /* todo */
++        argv1[0] = dash_cmdname;
++      }
++    }
+ 
+     if (do_launcher) {
++      free_the_launcher = true;
+       launcher_init(&argv1);
+       DialogBox(inst, MAKEINTRESOURCE(IDD_LAUNCHER), NULL, (DLGPROC)launcher_dlgproc);
+       if (launcher_cancelled) {
+@@ -2805,6 +2824,9 @@ main(int argc, char *argv[])
+       launcher_setup_env();
+       launcher_setup_argv();
+       launcher_save_prefs();
++      if (launcher_do_dedicated_window) {
++        launcher_exec_dedicated();
++      }
+     }
+     // Ask /etc/post-install/05-home-dir.post not to "cd ~/" in an Alt-F2 window
+     {
+@@ -2819,7 +2841,7 @@ main(int argc, char *argv[])
+       argv1, &(struct winsize){term_rows, term_cols, term_width, term_height}
+     );
+ 
+-    if (do_launcher) {
++    if (free_the_launcher) {
+       launcher_free();
+     }
+   }
+-- 
+2.12.0
+

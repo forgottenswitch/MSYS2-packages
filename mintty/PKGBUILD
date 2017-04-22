@@ -2,7 +2,7 @@
 
 pkgname=mintty
 pkgver=2.7.3
-pkgrel=1
+pkgrel=2
 epoch=1
 pkgdesc="Terminal emulator with native Windows look and feel"
 arch=('i686' 'x86_64')
@@ -11,18 +11,42 @@ groups=('base')
 depends=('sh')
 url="https://mintty.github.io"
 source=(${pkgname}-${pkgver}.tar.gz::https://github.com/mintty/mintty/archive/${pkgver}.tar.gz
-        001-fix-identation-without-guard.patch)
+        001-fix-identation-without-guard.patch
+        0002-Add-MSYS2-launcher.patch
+        0003-Fix-current-dir-inheritance-on-Alt-F2-for-MSYS2.patch
+        0004-Display-etc-shells-in-launcher.patch
+        0005-Allow-shell-types-to-have-dedicated-taskbar-items.patch
+        0006-Document-the-launcher-in-manpage.patch
+        LICENSE.msys2-launcher
+        mingw32.ico
+        mingw64.ico)
 sha256sums=('eeaa5e2b5ed68354ae2dbea3ce4998cbbd620f13b330ab64383fd4e7e6b89e47'
-            'bc6011ebaa214083b6f15c6f21f217b79435139e549891b49cfd1380651a8c19')
+            'bc6011ebaa214083b6f15c6f21f217b79435139e549891b49cfd1380651a8c19'
+            '3fea7d452608d45dc48e0f83fe4e79a040c11bdd2660d00748450138084ffa11'
+            'e180296f86a58a874b9134c49baf1c311b3fea8626d302978c6f3c86fb2739e8'
+            'a5637ce8ba380d8a463a373a7aa07440b371b750703f791231f1c5ad67a1a230'
+            '043c6497a3312e712ddc16f2c803a3415f4e954484872678bc749bda2bcd4571'
+            '33249f2b19b2f3062939cb8943fb869c7f934972c4dee33e5a7422b842a1c552'
+            '568ee49de8f3cca9602ba4374323b1dbc24e28b24dfb97ac4bc3320fd2763933'
+            '40a10a03382b93f196464b11ec179f903b9af6d281a9327472b4fb9693b0ca8f'
+            'be368cc325f33db9035dc4839bb967bebe9b896bdd7582749124245ccbc38c9f')
 
 prepare() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   patch -p1 -i ${srcdir}/001-fix-identation-without-guard.patch
+  patch -p1 -i ${srcdir}/0002-Add-MSYS2-launcher.patch
+  patch -p1 -i ${srcdir}/0003-Fix-current-dir-inheritance-on-Alt-F2-for-MSYS2.patch
+  patch -p1 -i ${srcdir}/0004-Display-etc-shells-in-launcher.patch
+  patch -p1 -i ${srcdir}/0005-Allow-shell-types-to-have-dedicated-taskbar-items.patch
+  patch -p1 -i ${srcdir}/0006-Document-the-launcher-in-manpage.patch
+  cp -f ${srcdir}/LICENSE.msys2-launcher .
+  cp -f ${srcdir}/mingw32.ico .
+  cp -f ${srcdir}/mingw64.ico .
 }
 
 build() {
   cd "${srcdir}/${pkgname}-${pkgver}"
-  make
+  make MAINLIB_VER=${pkgver}.${pkgrel}
 }
 
 package() {
@@ -31,10 +55,16 @@ package() {
   mkdir -p ${pkgdir}/usr/share/man/man1
   mkdir -p ${pkgdir}/usr/share/licenses/${pkgname}
 
+  mainlib="msys-mintty-${pkgver}.${pkgrel}"
+  install -m755 bin/${mainlib}.dll ${pkgdir}/usr/bin/${mainlib}.dll
   install -m755 bin/mintty.exe ${pkgdir}/usr/bin/mintty.exe
+  install -m755 bin/mintty-as-msys2.exe ${pkgdir}/usr/bin/mintty-as-msys2.exe
+  install -m755 bin/mintty-as-mingw32.exe ${pkgdir}/usr/bin/mintty-as-mingw32.exe
+  install -m755 bin/mintty-as-mingw64.exe ${pkgdir}/usr/bin/mintty-as-mingw64.exe
   install -m644 docs/mintty.1 ${pkgdir}/usr/share/man/man1/mintty.1
 
   install -m644 LICENSE ${pkgdir}/usr/share/licenses/${pkgname}/
   install -m644 LICENSE.Oxygen ${pkgdir}/usr/share/licenses/${pkgname}/
   install -m644 LICENSE.PuTTY ${pkgdir}/usr/share/licenses/${pkgname}/
+  install -m644 LICENSE.msys2-launcher ${pkgdir}/usr/share/licenses/${pkgname}/
 }
