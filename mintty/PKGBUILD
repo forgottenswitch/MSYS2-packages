@@ -2,33 +2,34 @@
 
 pkgname=mintty
 pkgver=2.7.6
-pkgrel=1
+m2lver=2.1
+pkgrel=2
 epoch=1
-pkgdesc="Terminal emulator with native Windows look and feel"
+pkgdesc="Terminal emulator with native Windows look and feel, with MSYS2 launcher added"
 arch=('i686' 'x86_64')
 license=('GPL3')
 groups=('base')
 depends=('sh')
 url="https://mintty.github.io"
-source=(${pkgname}-${pkgver}.tar.gz::https://github.com/mintty/mintty/archive/${pkgver}.tar.gz)
-sha256sums=('67092f0c0c0291c52e6ad65747706fd704d6d09ab11e14b01004be30706b3bbd')
-
-prepare() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
-}
+source=(${pkgname}-${pkgver}-msys2launcher-${m2lver}.tar.gz::https://github.com/forgottenswitch/mintty/archive/${pkgver}-msys2launcher-${m2lver}.tar.gz)
+sha256sums=('8272afea01906e9cfb514d4aaf4ffee81cb5fd2443ea0a6618642b291678fd11')
 
 build() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd "${srcdir}/${pkgname}-${pkgver}-msys2launcher-${m2lver}"
   make
 }
 
 package() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd "${srcdir}/${pkgname}-${pkgver}-msys2launcher-${m2lver}"
   mkdir -p ${pkgdir}/usr/{bin,share}
   mkdir -p ${pkgdir}/usr/share/man/man1
   mkdir -p ${pkgdir}/usr/share/licenses/${pkgname}
 
+  install -m755 bin/msys-mintty-m2l-0.dll ${pkgdir}/usr/bin/msys-mintty-m2l-0.dll
   install -m755 bin/mintty.exe ${pkgdir}/usr/bin/mintty.exe
+  install -m755 bin/mintty-as-msys2.exe   ${pkgdir}/usr/bin/mintty-as-msys2.exe
+  install -m755 bin/mintty-as-mingw32.exe ${pkgdir}/usr/bin/mintty-as-mingw32.exe
+  install -m755 bin/mintty-as-mingw64.exe ${pkgdir}/usr/bin/mintty-as-mingw64.exe
   install -m644 docs/mintty.1 ${pkgdir}/usr/share/man/man1/mintty.1
 
   install -m644 LICENSE ${pkgdir}/usr/share/licenses/${pkgname}/
